@@ -76,12 +76,13 @@ pip install -r requirements.txt
 Create `.env`:
 ```
 OPENAI_API_KEY=sk-...
-TARGET_URL=https://hcaptcha.com/
+#TARGET_URL=https://hcaptcha.com/
 CHROME_PATH="C:\Program Files\Google\Chrome\Application\chrome.exe"
 CHROME_REMOTE_DEBUG_PORT=9222
 CHROME_USER_DATA_DIR=C:\chrome-profile
-```
-
+CHROME_PROXY=
+HTTP_PROXY=
+HTTPS_PROXY=
 Run:
 ```powershell
 python main.py
