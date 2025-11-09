@@ -1,113 +1,201 @@
 # context.md
 
-Технический конспект для разработчиков: описывает взаимосвязи модулей, порядок стадий и ключевые решения в проекте `abxod_Hcaptcha`.
+Техконспект по проекту `abxod_Hcaptcha`: описывает связи модулей, форматы артефактов и алгоритмы трёх стадий.
 
 ## 1. Общий конвейер
 
 ```
 main.py
-├─ donttouch.ensure()               # контроль шаблонов
-├─ chrome_utils.ensure_chrome...    # окно Chrome + URL
-├─ stage_checkbox_question.click... # stage 1: чекбокс
-├─ stage_checkbox_question.capture  # stage 2: вопрос → question.json
-├─ stage_grid.capture...            # stage 3a: сетка → grid_objects.json
-└─ stage_analyze.analyze...         # stage 3b: анализ → grid_choice.json + клики
+├─ donttouch.ensure()               # контроль PNG
+├─ chrome_utils.ensure_chrome...    # активируем/запускаем Chrome
+├─ stage_checkbox_question.click... # Stage 0: клик по checkbox.png
+├─ stage_checkbox_question.capture  # Stage 1: вопрос → question.json
+├─ stage_grid.capture...            # Stage 2: сетка → grid_objects.json
+└─ stage_analyze.analyze...         # Stage 3: анализ → grid_choice/verify + клики
 ```
 
-Каждая стадия использует общий набор helper’ов из `core.py` (константы, промпты, Vision) и `chrome_utils` (скриншоты). JSON-артефакты служат контрактами между стадиями: вопрос и тайлы можно переиспользовать без повторного скриншота.
+Каждый этап использует `core.py` (пути, промпты, Vision helper’ы) и `chrome_utils` (скриншоты). JSON‑файлы — протокол между стадиями; их можно править вручную для повторного анализа.
 
-## 2. Модули и связи
+## 2. Файлы и зависимости
 
-| Модуль | Роль | Зависимости | Выход |
+| Модуль | Роль | Зависимости | Артефакты |
 | --- | --- | --- | --- |
-| `core.py` | Центральный «сервис» с путями, порогами, клиентом OpenAI и текстовой таксономией. Реализует `vision_json`, нормализацию label’ов, определение категорий и работу с промптами. | `config.OPENAI_API_KEY`, `PIL`, `openai`, `json`, `re`. | Строковые константы, функции utility, объект `client`. |
-| `chrome_utils.py` | Управляет Chrome через pyautogui: гарантирует активное окно, вводит URL, делает скриншоты. | `.env` из `config`, `pyautogui`, `pygetwindow`, `subprocess`. | Функции `ensure_chrome_and_open_url`, `screenshot_full`. |
-| `stage_checkbox_question.py` | Этапы 1 и 2. Сначала находит чекбокс по `png/checkbox.png`, затем ловит панель вопроса, отправляет в Vision и сохраняет JSON. | `template_utils.match_best_template`, `chrome_utils.screenshot_full`, `core.vision_json`. | `question.json`. |
-| `stage_grid.py` | Находит сетку (`png/grid_template.png`), режет на 3×3, вызывает Vision для label/conf каждого тайла. | `template_utils.match_template_multiscale`, `core.img_to_b64`, `core.normalize_label`, `core.categories_from_label`. | `grid_objects.json`. |
-| `stage_analyze.py` | Собирает question/grid, формирует общий prompt Vision и кликает по выбранным тайлам. | `core.vision_json`, `core.extract_json_object`, `chrome_utils.screenshot_full`, OpenCV/pyautogui. | `grid_choice.json` + реальные клики. |
-| `donttouch.py` | Контроль целостности `png/donttouch.png`: baseline, hash, read-only. | `hashlib`, `shutil`, `stat`. | Восстановленный PNG, предотвращение случайной правки. |
-| `template_utils.py` | Обёртки над OpenCV Template Matching (обычный и multiscale). | `cv2`, `numpy`, `PIL`. | Кропы нужных панелей + score. |
-| `png/chekbox.py`, `vision_agent.py` | Экспериментальные скрипты: прямой Vision для чекбокса/координат. | OpenAI, PIL, pyautogui. | Не участвуют в основном пайплайне, но могут вдохновить на новые функции. |
+| `core.py` | Центр: пути (`BASE_DIR`, `TMP_DIR`), пороги (`MATCH_*`), OpenAI client, таксономия, `vision_json`, `get_prompt`, `save_json`. | `config`, `PIL`, `openai`, `json`. | `question.json`, `grid_objects.json`, `grid_choice.json`, `grid_verify.json` (через `save_json`). |
+| `chrome_utils.py` | Работа с Chrome: активное окно, ввод URL, `screenshot_full`. | `.env`, `pyautogui`, `pygetwindow`. | Скриншоты (PIL). |
+| `stage_checkbox_question.py` | Stage 0/1: кликает checkbox, затем ловит панель вопроса по `question_template.png`, отправляет в Vision (`question_extraction`), сохраняет `question.json`. | `template_utils.match_best_template`, `core.get_prompt`. | `question.json`. |
+| `stage_grid.py` | Stage 2: ищет `grid_template.png` (multiscale), режет 3×3, сохраняет `tmp_clicks/tile_i.png`, подписывает тайлы через Vision (`grid_tile_label`). | `template_utils.match_template_multiscale`, `core.img_to_b64`, `core.categories_from_label`. | `grid_objects.json`, `tmp_clicks/*.png`. |
+| `stage_analyze.py` | Stage 3: объединяет вопрос+тайлы, вызывает Vision (`grid_selection`), кликает, запускает суперверификацию (до 2 автокоррекций) и пишет логи. | `core.get_prompt`, `chrome_utils.screenshot_full`, OpenCV, `pyautogui`. | `grid_choice.json`, `grid_verify.json`. |
+| `template_utils.py` | Обёртки над `cv2.matchTemplate`. | `cv2`, `numpy`. | Используется в stage-модулях (клик checkbox, поиск панелей). |
+| `stage_next_done.py` | Универсальный клик по `next.png` / `done.png`. | `chrome_utils.screenshot_full`, `core.MATCH_THRESHOLD_OBJECT`. | Используется в `main.py`. |
+| `donttouch.py` | Hash-защита PNG: baseline, verify, safe_update. | `hashlib`, `shutil`. | `png/donttouch.*`. |
+| `prompts.json` | Переопределение промптов (`grid_selection`, `verify_selection`, `question_extraction`, `grid_tile_label`). | `core.get_prompt`. | --- |
 
 ## 3. Детали стадий
 
-### 3.1 Stage 1 — клик по чекбоксу
-- В `stage_checkbox_question.click_checkbox_by_template()` производится полный скриншот (`chrome_utils.screenshot_full`), затем `cv2.matchTemplate` сравнивает его с `png/checkbox.png`.
-- Найденный прямоугольник переводится в координаты центра и передаётся `pyautogui` для клика.
-- Ошибки шаблона (не найден, плохой score) поднимаются исключением: лучше заменить PNG.
+### Stage 0/1 — чекбокс и вопрос
+- `click_checkbox_by_template()` делает screenshot и ищет `checkbox.png`. Центр прямоугольника передаётся в `pyautogui`.
+- `capture_question_to_json_retry()`:
+  1. Находит `question_template.png`.
+  2. Отправляет вырез в Vision (prompt можно переопределить).
+  3. Дополняет категории с помощью `core.detect_categories_in_text` / `categories_from_creature_hint`.
+  4. Сохраняет `question.json` (включая `image_b64` панели для отладки).
 
-### 3.2 Stage 2 — извлечение вопроса
-- `match_best_template` ищет `png/question_template.png`. Пока `score < MATCH_THRESHOLD_QUESTION`, делаются повторные попытки с задержкой `RETRY_INTERVAL_SEC`, но не дольше `MAX_WAIT_SEC_STAGE2`.
-- Картинка панели кодируется через `core.img_to_b64` и отправляется в Vision с prompt `question_extraction` (может переопределяться в `prompts.json`).
-- Результат дополняется псевдо-NLP обработкой: `detect_categories_in_text`, `categories_from_creature_hint`.
-- Итог сохраняется в `question.json` и включает сам скрин (base64) для повторных тестов.
+### Stage 2 — сетка
+- `stage_grid.capture_grid_objects_to_json_retry()`:
+  1. Находит `grid_template.png` multiscale.
+  2. Делит картинку на 9 тайлов, сохраняет `tmp_clicks/tile_i.png`.
+  3. Для каждого тайла вызывает Vision (`grid_tile_label`) → `label`, `conf`.
+  4. Считает `norm_label = core.normalize_label(label)`, категории по таксономии.
+  5. Пишет `grid_objects.json` (порядок `index_order` = 0..8).
 
-### 3.3 Stage 3a — сетка тайлов
-- `match_template_multiscale` подбирает масштаб шаблона `png/grid_template.png`, чтобы выдерживать разные разрешения.
-- После нарезки на 9 прямоугольников каждый tile сохраняется в `tmp_clicks/tile_{i}.png` (позже используется повторно).
-- Для каждого тайла формируется Vision prompt `grid_tile_label` → ожидаем JSON вида `{ "label": "...", "conf": 0..1 }`.
-- `core.normalize_label` чистит строку, `categories_from_label` сопоставляет с таксономией (`bird`, `mammal`, `vehicle`, ...). Эти категории помогут на стадии анализа.
+### Stage 3 — анализ, клики, суперпроверка
 
-### 3.4 Stage 3b — анализ и клики
-- `stage_analyze.analyze_json_and_click_by_images()` читает `question.json` и `grid_objects.json`.
-- `question_b64` + список тайлов собираются в `image_list`. Vision получает большой prompt с описанием задания, критериев и индексов.
-- Ответ ожидается в JSON `{ "indexes": [...], "reason": "..." }`. Если модель вернула число как позицию в массиве, код пытается отобразить его обратно к фактическому индексу (`index_order`).
-- **Постобработка:**  
-  - `match_categories` проверяет попадание в `target_categories` и отсутствие пересечения с `exclude_categories`.  
-  - Спецкейс «birdhouse»: если пример содержит «скворечник»/`birdhouse`, берутся только тайлы, где label или categories указывают на птиц.  
-  - Конечный список сортируется и пишется в `grid_choice.json` вместе с исходным ответом Vision.
-- После фиксации индексов берётся свежий скриншот всей страницы, и для каждого тайла повторно выполняется `cv2.matchTemplate`, чтобы найти координаты клика в живом интерфейсе. Это защищает от смещений между моментом съёмки и настоящим кликом.
+**Входы:** `question.json`, `grid_objects.json`.  
+**Основные шаги:**
 
-## 4. Работа с OpenAI Vision
+1. **Vision выбор.** `grid_selection` получает `[question_b64] + tiles` и возвращает `{indexes, reason}`. Результат нормализуется `_sanitize_indexes`.
+2. **Постфильтры (`_apply_post_filters`):**
+   - `target_categories` / `exclude_categories`;
+   - задачи «выберите всех …» → добираем все тайлы с тем же `norm_label`/категорией;
+   - birdhouse/скворечник/дупло → оставляем только тайлы с птицами.
+3. **Клики.** `screenshot_full()` + `_locate_tiles()` → координаты совпадений с `tmp_clicks/tile_i.png`. `_click_tiles()` кликает все выбранные индексы (пропуская матчи ниже `MATCH_THRESHOLD_OBJECT`).
+4. **Суперпроверка (`_verification_loop`):**
+   - Константы: `VERIFY_PAUSE`, `MAX_FIX_ROUNDS = 2`.
+   - На каждой итерации:
+     - ждём паузу, снимаем скрин;
+     - `_verify_with_vision()` получает:
+       * текст задания (`task_text`, `selection_criteria`);
+       * индексацию 0..8;
+       * `expected_from_stage1` — список из первого этапа;
+       * подсказки: «клавиатура → мышь/монитор», «скворечник → только птицы», и др.;
+       * просит вернуть JSON `{correct_indexes, selected_indexes, ok, reason}`.
+     - Индексы прогоняются через `_sanitize_indexes`. Если Vision не указал correct, используется список первого этапа.
+     - `missed = correct - selected`, `extra = selected - correct`.
+     - Логируем попытку в `attempts`.
+     - Если `ok` и нет расхождений → выходим с успехом.
+     - Если попыток осталось и сетка не сменилась (достаточно match’ей):
+       * кликаем `missed` (`action="add"`);
+       * кликаем `extra` (`action="remove"`);
+       * результаты пишем в `actions` (attempt, action, index, result, score).
+     - Если `len(detections) <= len(index_order)//2`, считаем, что сетка изменилась (`note: "grid_changed"`) и прекращаем цикл.
+5. **Логи.**
+   - `grid_choice.json` содержит `index_order`, `raw_from_model`, `chosen_indexes`, `reason`.
+   - `grid_verify.json` содержит `chosen_indexes`, `attempts`, `actions`, `ok`.
+6. **Возврат.** Функция возвращает `True`, если финальный `ok`, иначе `False`. `main.py` решает, кликать ли NEXT/DONE.
 
-Функция `core.vision_json(prompt, image_b64_list)` реализует двухступенчатую схему:
-1. Пытается вызвать `client.responses.create(..., response_format={"type": "json_object"})` и парсит `resp.output_parsed`.
-2. Если API вернул текст, запускается fallback со сборкой `resp.output_text` и `core.extract_json_object` для извлечения первого валидного JSON-блока.
+## 4. Артефакты JSON
 
-Таким образом, stage-модули всегда получают dict, даже если модель не выполнила строгий JSON output. Настройки модели (`model="gpt-4.1-mini"`) собраны в одном месте и легко меняются.
+### question.json
+```json
+{
+  "task_text": "...",
+  "selection_criteria": "...",
+  "positive_keywords": [],
+  "negative_keywords": [],
+  "example_container": "...",
+  "target_categories": ["bird"],
+  "exclude_categories": [],
+  "image_b64": "..."
+}
+```
 
-## 5. Таксономия и фильтрация
+### grid_objects.json
+```json
+{
+  "objects": [
+    {
+      "index": 0,
+      "template_path": "tmp_clicks/tile_0.png",
+      "label": "кошка",
+      "label_conf": 0.91,
+      "norm_label": "кошка",
+      "categories": ["mammal"]
+    },
+    ...
+  ]
+}
+```
 
-- `core.TAXONOMY` — словарь категорий → список ключевых слов (латиница + кириллица). Его используют:  
-  - `detect_categories_in_text` (поиск в задании).  
-  - `categories_from_label` (по vision label тайла).  
-  - `categories_from_creature_hint` (разбор текстовых подсказок).
-- Пороговые значения: `MATCH_THRESHOLD_OBJECT`, `CONF_TILE_LABEL_OK`, `VISUAL_SIM_THRESHOLD`, `DEDUP_RADIUS_PX`. Они участвуют в фильтрации чекбоксов/тайлов и защите от дрожания координат.
-- Спецкейс `birdhouse` в `stage_analyze` опирается на `target_categories` и на содержимое `example_container`: если указано строение для птиц, алгоритм принудительно выбирает тайлы с меткой «bird».
+### grid_choice.json
+```json
+{
+  "task_text": "...",
+  "selection_criteria": "...",
+  "index_order": [0,1,2,3,4,5,6,7,8],
+  "raw_from_model": [0,2,5],
+  "chosen_indexes": [2,5],
+  "reason": "Vision explanation"
+}
+```
 
-## 6. Управление шаблонами
+### grid_verify.json
+```json
+{
+  "chosen_indexes": [2,5],
+  "attempts": [
+    {
+      "attempt": 0,
+      "correct_indexes": [2,5],
+      "selected_indexes": [2],
+      "missed": [5],
+      "extra": [],
+      "ok": false,
+      "verify_reason": "tile 5 not highlighted"
+    },
+    {
+      "attempt": 1,
+      "correct_indexes": [2,5],
+      "selected_indexes": [2,5],
+      "missed": [],
+      "extra": [],
+      "ok": true,
+      "verify_reason": "all good after correction"
+    }
+  ],
+  "actions": [
+    {"attempt": 0, "action": "add", "index": 5, "result": "clicked", "score": 0.82}
+  ],
+  "ok": true
+}
+```
 
-- Все эталонные PNG лежат в `png/`. Важные файлы:  
-  - `checkbox.png` — маска для первого клика.  
-  - `question_template.png` — bounding box панели вопроса.  
-  - `grid_template.png` — bounding box сетки 3×3.  
-  - `donttouch.png` — образец для контроля целостности.  
-  - `next.png` — заготовка для будущей кнопки «Next challenge».
-- `donttouch.py` предоставляет API: `init_baseline`, `verify_or_restore`, `safe_update`, `ensure`. Он хранит sha256 в `png/donttouch.sha256` и backup в `png/donttouch.backup.png`. Все операции снимают/возвращают read-only атрибуты, чтобы любая ручная правка была заметна.
+## 5. Семантика и эвристики
+- `core.TAXONOMY` содержит после слов возможные категории (`bird`, `vehicle`, `computer_accessory` и т.д.). Используется:
+  - при фильтрации Vision-ответов;
+  - в birdhouse-спецкейсе (ключевые слова: «birdhouse», «скворечн», «домик для птиц», «дупло»).
+- В `_apply_post_filters`:
+  - `target_categories` / `exclude_categories` из `question.json`;
+  - задания «выберите всех …» ищут одинаковые `norm_label` или категории;
+  - fallback при пустом списке — если `target_categories` заполнены или текст содержит `creature`.
+- В `_verify_with_vision` подсказки помогают Vision понять контекст (например, «клавиатура → ищем компьютерные аксессуары»).
 
-## 7. Временные файлы
+## 6. Промпты
+- `grid_selection` — основной выбор индексов.
+- `verify_selection` — суперпроверка; принимает в prompt текст задания и список индексов, которые уже выбраны.
+- `question_extraction`, `grid_tile_label` — извлечение текста и подписей тайлов.
+Все промпты можно переопределить в `prompts.json`. Если ключ отсутствует, используется встроенный текст.
 
-- `core.TMP_DIR` (`tmp_clicks/`) создаётся `core.ensure_tmp_dir()` и очищается `cleanup_tmp_dir()`. В нём лежат `tile_*.png`, которые используются как шаблоны при финальных кликах (template matching на живом экране).
-- Эти файлы можно использовать для отладки (например, смотреть, что именно отправилось в Vision). Важен порядок (`index_order`), который сохраняется в `grid_choice.json` для восстановления соответствия.
+## 7. Тайминги и пороги
+- `MATCH_THRESHOLD_QUESTION`, `MATCH_THRESHOLD_GRID`, `MATCH_THRESHOLD_OBJECT` — минимальные коэффициенты `cv2.matchTemplate`.
+- `RETRY_INTERVAL_SEC`, `MAX_WAIT_SEC_STAGE2` — таймауты при поиске шаблонов.
+- `CLICK_PAUSE` (0.18 c) — задержка между кликами.
+- `VERIFY_PAUSE` (0.4 c) — пауза перед каждым скрином суперпроверки.
+- `MAX_FIX_ROUNDS = 2` — максимум дополнительных попыток автокоррекции.
 
-## 8. Дополнительные утилиты
+## 8. Переходы NEXT / DONE
+`main.py` выполняет три раунда:
+1. После первых двух `analyze...()` возвращает bool; если стадия прошла, `stage_next_done.click_next_button()` ищет `next.png`. Если шаблон не найден — просто логируем.
+2. После третьего раунда вызывается `click_done_button()` (`done.png`).
+Шаблон `next.png`/`done.png` должен подходить под тему задачи; при необходимости замените PNG и обновите baseline через `donttouch.py`.
 
-- `png/chekbox.py` — альтернативный способ найти чекбокс: вместо template matching отправляет Vision prompt с референсными PNG из `png/`.
-- `vision_agent.py` — упрощённый клиент, который принимает произвольный `query` и возвращает координаты `(x, y)` для переданной картинки; полезно для тестирования отдельных элементов.
+## 9. Отладка
+- `tmp_clicks/grid_before.png`, `grid_after_*.png` — снимки перед и после кликов.
+- `grid_choice.json` + `grid_verify.json` — полный trace Vision-решений.
+- Для повторного теста можно заменить `grid_objects.json`/`question.json` и запустить только `stage_analyze.analyze_json_and_click_by_images()`.
 
-## 9. Известные ограничения
+## 10. Риски и TODO
+- Vision может вернуть индексы вне 0..8 — `_sanitize_indexes` фильтрует, но лучше расширить подсказки.
+- Если сетка сменится во время суперпроверки, цикл остановится с `grid_changed`. Нужна стратегия перезапуска (TODO).
+- Стоимость API: минимум 12 запросов на одну сетку (9 тайлов + панель + анализ + одна или две проверки). Рассмотрите кэширование Vision-ответов.
 
-1. **Жёсткая привязка к Windows** — используются `pyautogui` и `pygetwindow` с Windows hotkey. Для Linux/macOS нужна адаптация.
-2. **Масштабирование дисплея** — если в Windows стоит масштаб ≠ 100 %, шаблоны могут не совпадать.
-3. **Зависимость от OpenAI** — любой сетевой сбой или превышение квоты остановит пайплайн. Нет локального fallback-а.
-4. **Недетерминированность Vision** — иногда модель возвращает индексы как строки/дроби; код пытается привести их к int, но это может давать неожиданные результаты.
-5. **Повторные сетки** — автоматический клик по кнопке «Next» пока не реализован, поэтому скрипт рассчитан на одну сетку.
-
-## 10. Возможные расширения
-
-- Добавить стадию для обработки «ещё одно испытание» (`png/next.png` + отдельный Vision prompt).
-- Интегрировать DevTools Protocol, чтобы получать DOM-координаты без template matching.
-- Кэшировать Vision-ответы для одинаковых тайлов (хеш изображения + файл истории).
-- Расширить `prompts.json` вариантами под разные языки/темы hCaptcha.
-
-Документ поддерживает README.md: там описаны инструкции по установке и запуску. Здесь собраны технические детали и взаимосвязи между файлами.
+Дополнительные подробности по пользовательской инструкции — в `README.md`.

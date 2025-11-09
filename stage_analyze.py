@@ -11,7 +11,6 @@ import pyautogui
 from PIL import Image
 
 from chrome_utils import screenshot_full
-from template_utils import match_best_template
 from core import (
     BASE_DIR,
     TMP_DIR,
@@ -87,17 +86,43 @@ def _click_tiles(indexes: List[int], detections: Dict[int, dict], action: str, l
             log.append({"attempt": attempt, "action": action, "index": idx, "result": "clicked", "score": det["score"]})
 
 
-def _verify_with_vision(full_img: Image.Image, index_order: List[int]) -> dict:
+def _coerce_ok(value: Any, correct_set: set[int], selected_set: set[int]) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "yes", "да", "ok", "correct"}:
+            return True
+        if lowered in {"false", "no", "нет", "wrong"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return correct_set == selected_set
+
+
+def _verify_with_vision(
+    full_img: Image.Image,
+    question: dict,
+    index_order: List[int],
+    expected_from_stage1: List[int],
+) -> dict:
+    task_text = (question.get("task_text") or "").strip()
+    selection_criteria = (question.get("selection_criteria") or "").strip()
     prompt_default = (
-        "На изображении сетка 3x3 после кликов.\n"
-        "Верни строго JSON {"
-        '  "correct_indexes": [<int>],'
-        '  "selected_indexes": [<int>],'
-        '  "ok": <bool>,'
-        '  "reason": "<кратко>"'
-        "}\n"
-        "correct_indexes — какие тайлы должны быть выбраны по заданию,"
-        "selected_indexes — какие визуально подсвечены."
+        "На изображении — сетка 3×3 после кликов. Индексы идут по рядам: "
+        "[0,1,2] верхний, [3,4,5] средний, [6,7,8] нижний.\n"
+        "Используй текст задания чтобы понять, какие объекты ДОЛЖНЫ быть выбраны.\n"
+        "Нужно вернуть строго JSON вида:\n"
+        '{ "correct_indexes": [<int>], "selected_indexes": [<int>], "ok": <bool>, "reason": "<кратко>" }\n'
+        "correct_indexes — какие тайлы соответствуют заданию;\n"
+        "selected_indexes — какие тайлы на картинке сейчас подсвечены;\n"
+        "ok — true, если выбор полностью совпадает.\n"
+        f"Текст задания: {task_text}\nПравило выбора: {selection_criteria}\n"
+        f"Индексы, которые выбрал первый этап: {expected_from_stage1}\n"
+        "Подсказки:\n"
+        "- если задание про клавиатуру/компьютерные аксессуары, правильны мыши, мониторы и т.п., но не животные или одежда.\n"
+        "- если сказано «скворечник / дупло / домик для птиц», правильны только птицы, а не коты/собаки/люди.\n"
+        "- если формулировка «выберите всех …», нужно выбрать все тайлы с тем же типом объекта."
     )
     prompt = get_prompt("verify_selection", prompt_default)
     resp = vision_json(prompt, [img_to_b64(full_img)])
@@ -105,33 +130,19 @@ def _verify_with_vision(full_img: Image.Image, index_order: List[int]) -> dict:
         resp = {}
     correct = _sanitize_indexes(resp.get("correct_indexes") or [], index_order)
     selected = _sanitize_indexes(resp.get("selected_indexes") or [], index_order)
-    ok = bool(resp.get("ok"))
+    if not correct:
+        correct = list(expected_from_stage1)
+    correct_set = set(correct)
+    selected_set = set(selected)
+    ok_value = resp.get("ok")
+    ok = _coerce_ok(ok_value, correct_set, selected_set)
     reason = (resp.get("reason") or "").strip()
-    return {"correct": correct, "selected": selected, "ok": ok, "reason": reason}
-
-
-def _click_next_button(full_img: Image.Image | None) -> None:
-    if full_img is None:
-        return
-    try:
-        next_png = BASE_DIR / "png" / "next.png"
-        if not next_png.is_file():
-            return
-        cropped, score = match_best_template(full_img, next_png)
-        if score < MATCH_THRESHOLD_OBJECT:
-            print("[stage_analyze] next template score too low, skip")
-            return
-        templ = cv2.imread(str(next_png), cv2.IMREAD_COLOR)
-        src = cv2.cvtColor(np.array(full_img), cv2.COLOR_RGB2BGR)
-        _minv, maxv, _minl, maxl = cv2.minMaxLoc(cv2.matchTemplate(src, templ, cv2.TM_CCOEFF_NORMED))
-        x1, y1 = maxl
-        th, tw = templ.shape[:2]
-        cx, cy = int(x1 + tw // 2), int(y1 + th // 2)
-        pyautogui.moveTo(cx, cy, duration=0.12)
-        pyautogui.click()
-        print("[stage_analyze] clicked NEXT")
-    except Exception as e:
-        print(f"[stage_analyze] NEXT click failed: {e}")
+    return {
+        "correct": sorted(correct_set),
+        "selected": sorted(selected_set),
+        "ok": ok,
+        "reason": reason,
+    }
 
 
 def _apply_post_filters(chosen: List[int], objects: List[dict], question: dict, index_order: List[int]) -> List[int]:
@@ -208,7 +219,12 @@ def _apply_post_filters(chosen: List[int], objects: List[dict], question: dict, 
     return sorted(idx for idx in chosen_set if idx in index_order)
 
 
-def _verification_loop(chosen: List[int], index_order: List[int], objects: List[dict]) -> Tuple[bool, List[dict], List[dict], Image.Image | None]:
+def _verification_loop(
+    chosen: List[int],
+    index_order: List[int],
+    objects: List[dict],
+    question: dict,
+) -> Tuple[bool, List[dict], List[dict], Image.Image | None]:
     attempts: List[dict] = []
     actions: List[dict] = []
     last_img: Image.Image | None = None
@@ -217,7 +233,7 @@ def _verification_loop(chosen: List[int], index_order: List[int], objects: List[
         full = screenshot_full()
         last_img = full
         detections, _ = _locate_tiles(full, objects)
-        verify = _verify_with_vision(full, index_order)
+        verify = _verify_with_vision(full, question, index_order, chosen)
         correct_set = set(verify["correct"] or chosen)
         selected_set = set(verify["selected"])
         missed = sorted(correct_set - selected_set)
@@ -332,7 +348,7 @@ def analyze_json_and_click_by_images() -> bool:
     detections, _ = _locate_tiles(before, objects)
     _click_tiles(chosen_indexes, detections, "initial", log=None, attempt=None)
 
-    final_ok, attempts_log, actions_log, last_img = _verification_loop(chosen_indexes, index_order, objects)
+    final_ok, attempts_log, actions_log, _ = _verification_loop(chosen_indexes, index_order, objects, question)
     save_json(
         BASE_DIR / "grid_verify.json",
         {
@@ -343,5 +359,4 @@ def analyze_json_and_click_by_images() -> bool:
         },
     )
 
-    _click_next_button(last_img)
     return final_ok

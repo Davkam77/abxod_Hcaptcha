@@ -1,6 +1,6 @@
 {
   "template": "grid_template.png",
-  "score": 0.482391893863678,
+  "score": 0.5267550349235535,
   "objects": [
     {
       "index": 0,
@@ -13,9 +13,9 @@
         79,
         79
       ],
-      "label": "щенок",
-      "label_conf": 0.85,
-      "norm_label": "щенок",
+      "label": "кошка",
+      "label_conf": 0.95,
+      "norm_label": "кошка",
       "categories": [
         "mammal"
       ]
@@ -50,7 +50,7 @@
         79
       ],
       "label": "кот",
-      "label_conf": 0.7,
+      "label_conf": 0.95,
       "norm_label": "кот",
       "categories": [
         "mammal"
@@ -85,11 +85,11 @@
         237,
         237
       ],
-      "label": "птица",
-      "label_conf": 0.65,
-      "norm_label": "птица",
+      "label": "щенок",
+      "label_conf": 0.85,
+      "norm_label": "щенок",
       "categories": [
-        "bird"
+        "mammal"
       ]
     },
     {
@@ -103,9 +103,9 @@
         395,
         237
       ],
-      "label": "кошка",
+      "label": "кот",
       "label_conf": 0.95,
-      "norm_label": "кошка",
+      "norm_label": "кот",
       "categories": [
         "mammal"
       ]
@@ -121,11 +121,11 @@
         79,
         395
       ],
-      "label": "птица",
-      "label_conf": 0.65,
-      "norm_label": "птица",
+      "label": "кот",
+      "label_conf": 0.95,
+      "norm_label": "кот",
       "categories": [
-        "bird"
+        "mammal"
       ]
     },
     {
@@ -139,11 +139,11 @@
         237,
         395
       ],
-      "label": "щенок",
-      "label_conf": 0.95,
-      "norm_label": "щенок",
+      "label": "птица",
+      "label_conf": 0.65,
+      "norm_label": "птица",
       "categories": [
-        "mammal"
+        "bird"
       ]
     },
     {
@@ -157,11 +157,11 @@
         395,
         395
       ],
-      "label": "кошка",
-      "label_conf": 0.9,
-      "norm_label": "кошка",
+      "label": "птица",
+      "label_conf": 0.7,
+      "norm_label": "птица",
       "categories": [
-        "mammal"
+        "bird"
       ]
     }
   ],
