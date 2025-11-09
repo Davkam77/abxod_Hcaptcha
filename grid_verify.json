@@ -1,0 +1,31 @@
+{
+  "chosen_indexes": [
+    0,
+    4,
+    5,
+    8
+  ],
+  "attempts": [
+    {
+      "attempt": 0,
+      "correct_indexes": [
+        0,
+        4,
+        5,
+        8
+      ],
+      "selected_indexes": [
+        0,
+        4,
+        5,
+        8
+      ],
+      "missed": [],
+      "extra": [],
+      "ok": true,
+      "verify_reason": "Выбраны все существа, которые могут укрыться в предмете."
+    }
+  ],
+  "actions": [],
+  "ok": true
+}
